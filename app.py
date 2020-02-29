@@ -16,7 +16,7 @@ EXCHANGE_API = 'https://api.exchangeratesapi.io'
 
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)  # TODO
 
 # Initialize bot and dispatcher
 bot = Bot(token=API_TOKEN, proxy=PROXY_URL) if PROXY_URL else Bot(token=API_TOKEN)
@@ -86,19 +86,34 @@ def format_latest(data):
     return '\n'.join([f'{k}: {v}' for k, v in data.items()])
 
 
-@dp.message_handler(commands=['list', 'lst'])
-async def lst(message: types.Message):
+async def update_curr_info():
+    stat_data_raw = await query_ex_api('/latest?base=USD')
+    stat_data = parse_latest(stat_data_raw)
+    await update_cache(stat_data)
+    return stat_data
+
+
+async def get_curr_info():
     stat_data_cache = await get_cache()
     if not stat_data_cache['last_request_at'] \
             or (time() - int(stat_data_cache['last_request_at']) > 10 * 60):  # todo 10 * 60
-        stat_data_raw = await query_ex_api('/latest?base=USD')
-        stat_data = parse_latest(stat_data_raw)
-        await update_cache(stat_data)
+        stat_data = update_curr_info()
     else:
         stat_data = conv_str_obj(stat_data_cache['cache'])
+    return stat_data
 
+
+@dp.message_handler(commands=['list', 'lst'])
+async def lst(message: types.Message):
+    stat_data = await get_curr_info()
     stat_data_fmt = format_latest(stat_data)
     await message.answer(stat_data_fmt)
+
+
+@dp.message_handler(commands=['exchange'])
+async def exchange(message: types.Message):
+    stat_data = await get_curr_info()
+    print(message)
 
 
 @dp.message_handler(commands=['start'])
