@@ -5,10 +5,10 @@ import aiosqlite
 import sqlite3
 from time import time
 from ujson import decode
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from aiogram import Bot, Dispatcher, executor, types
 from aiohttp import ClientSession
-
+# TODO comments
 API_TOKEN = ''  # TODO reset TOKEN and remove from here
 PROXY_URL = ''
 DB_PATH = 'db.sqlite'
@@ -16,7 +16,7 @@ EXCHANGE_API = 'https://api.exchangeratesapi.io'
 
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG)  # TODO
+logging.basicConfig(level=logging.INFO)  # TODO
 
 # Initialize bot and dispatcher
 bot = Bot(token=API_TOKEN, proxy=PROXY_URL) if PROXY_URL else Bot(token=API_TOKEN)
@@ -97,7 +97,7 @@ async def get_curr_info():
     stat_data_cache = await get_cache()
     if not stat_data_cache['last_request_at'] \
             or (time() - int(stat_data_cache['last_request_at']) > 10 * 60):  # todo 10 * 60
-        stat_data = update_curr_info()
+        stat_data = await update_curr_info()
     else:
         stat_data = conv_str_obj(stat_data_cache['cache'])
     return stat_data
@@ -113,7 +113,37 @@ async def lst(message: types.Message):
 @dp.message_handler(commands=['exchange'])
 async def exchange(message: types.Message):
     stat_data = await get_curr_info()
-    print(message)
+    cmd_parts = message.text.split(' ')
+    cmd_sense = []
+    for part in cmd_parts:
+        if not part:
+            continue
+
+        if part.startswith('$'):
+            try:
+                cmd_sense.append(Decimal(part[1:]))
+                cmd_sense.append('USD')
+                continue
+            except InvalidOperation:
+                await message.answer('The command is wrong')
+                return
+
+        if part in stat_data.keys():
+            cmd_sense.append(part)
+            continue
+
+        try:
+            cmd_sense.append(Decimal(part))
+        except InvalidOperation:
+            continue
+
+    if len(cmd_sense) != 3 \
+            or not isinstance(cmd_sense[0], Decimal) \
+            or cmd_sense[1] != 'USD':
+        await message.answer('The command is wrong')
+        return
+
+    await message.answer(f'{round_cur(cmd_sense[0] * stat_data[cmd_sense[2]])} {cmd_sense[2]}')  # TODO a typo?
 
 
 @dp.message_handler(commands=['start'])
