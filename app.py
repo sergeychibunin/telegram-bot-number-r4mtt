@@ -3,6 +3,7 @@ import pickle
 import codecs
 import aiosqlite
 import sqlite3
+from datetime import date, timedelta
 from time import time
 from ujson import decode
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
@@ -21,6 +22,10 @@ logging.basicConfig(level=logging.INFO)  # TODO
 # Initialize bot and dispatcher
 bot = Bot(token=API_TOKEN, proxy=PROXY_URL) if PROXY_URL else Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
+
+
+def dt2str(dt):
+    return dt.strftime('%Y-%m-%d')
 
 
 def round_cur(cur):
@@ -144,6 +149,42 @@ async def exchange(message: types.Message):
         return
 
     await message.answer(f'{round_cur(cmd_sense[0] * stat_data[cmd_sense[2]])} {cmd_sense[2]}')  # TODO a typo?
+
+
+@dp.message_handler(commands=['history'])
+async def history(message: types.Message):
+    stat_data = await get_curr_info()
+    cmd_parts = message.text.split(' ')
+    cmd_sense = []
+    for part in cmd_parts:
+        if part == '\/history':
+            continue
+        pair = part.split('/')
+        if len(pair) == 2 and pair[1] in stat_data.keys():
+            cmd_sense.append(pair[1])
+
+    if f'\/history USD/{cmd_sense[0]} for 7 days' != message.text:
+        await message.answer('The command is wrong')
+        return
+
+    date_to = date.today()
+    date_from = date_to - timedelta(7)
+    h_data_raw = await query_ex_api(f'/history?'
+                                    f'start_at={dt2str(date_from)}&'
+                                    f'end_at={dt2str(date_to)}&'
+                                    f'base=USD&'
+                                    f'symbols={cmd_sense[0]}')
+    h_data = decode(h_data_raw)
+    try:
+        h_data['error']
+    except KeyError:
+        await message.answer('No exchange rate data is available for the selected currency.')
+        return
+    # h_data['rates']
+    # gen chart
+    # save chart
+    # send chart
+    # delete chart
 
 
 @dp.message_handler(commands=['start'])
