@@ -1,13 +1,16 @@
 import logging
+import pickle
+import codecs
 import aiosqlite
 import sqlite3
+from time import time
 from ujson import decode
 from decimal import Decimal, ROUND_HALF_UP
 from aiogram import Bot, Dispatcher, executor, types
 from aiohttp import ClientSession
 
-API_TOKEN = '724686344:AAH-LQ1SLMrYHPHBQANj9CgiMU9ARS6Awpk'  # TODO reset TOKEN and remove from here
-PROXY_URL = 'http://5.189.170.254:80'
+API_TOKEN = ''  # TODO reset TOKEN and remove from here
+PROXY_URL = ''
 DB_PATH = 'db.sqlite'
 EXCHANGE_API = 'https://api.exchangeratesapi.io'
 
@@ -24,6 +27,14 @@ def round_cur(cur):
     return cur.quantize(Decimal('0.01'), ROUND_HALF_UP)
 
 
+def conv_obj_str(obj):
+    return codecs.encode(pickle.dumps(obj), "base64").decode()
+
+
+def conv_str_obj(_str):
+    return pickle.loads(codecs.decode(_str.encode(), "base64"))
+
+
 async def query_ex_api(path=''):
     async with ClientSession() as session:
         async with session.get(f'{EXCHANGE_API}{path}') as resp:
@@ -31,6 +42,7 @@ async def query_ex_api(path=''):
 
 
 def storage():
+    # todo query pool?
     return aiosqlite.connect(DB_PATH)
 
 
@@ -43,12 +55,26 @@ def check_storage():
         cur.execute('CREATE TABLE stat (key text, value text)')
         cur.execute("INSERT INTO stat VALUES ('cache', '')")
         cur.execute("INSERT INTO stat VALUES ('last_request_at', '')")
+        conn.commit()
+        conn.close()
 
 
 async def update_cache(data):
     async with storage() as db:
-        await db.execute("UPDATE stat SET value = '{}' WHERE key = 'cache'", [data])
+        await db.execute("UPDATE stat SET value = :data WHERE key = 'cache'",
+                         {'data': str(conv_obj_str(data))})
+        await db.execute("UPDATE stat SET value = :data WHERE key = 'last_request_at'",
+                         {'data': str(int(time()))})
         await db.commit()
+
+
+async def get_cache():
+    cache = {}
+    async with storage() as db:
+        async with db.execute('SELECT key, value FROM stat') as cursor:
+            async for row in cursor:
+                cache[row[0]] = row[1]
+    return cache
 
 
 def parse_latest(raw_data):
@@ -57,14 +83,20 @@ def parse_latest(raw_data):
 
 
 def format_latest(data):
-    return '\n'.join([f'{k}{v}' for k, v in data.items()])
+    return '\n'.join([f'{k}: {v}' for k, v in data.items()])
 
 
 @dp.message_handler(commands=['list', 'lst'])
 async def lst(message: types.Message):
-    stat_data_raw = await query_ex_api('/latest?base=USD')
-    stat_data = parse_latest(stat_data_raw)
-    await update_cache(stat_data)
+    stat_data_cache = await get_cache()
+    if not stat_data_cache['last_request_at'] \
+            or (time() - int(stat_data_cache['last_request_at']) > 10 * 60):  # todo 10 * 60
+        stat_data_raw = await query_ex_api('/latest?base=USD')
+        stat_data = parse_latest(stat_data_raw)
+        await update_cache(stat_data)
+    else:
+        stat_data = conv_str_obj(stat_data_cache['cache'])
+
     stat_data_fmt = format_latest(stat_data)
     await message.answer(stat_data_fmt)
 
