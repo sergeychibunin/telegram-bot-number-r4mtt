@@ -10,10 +10,11 @@ from datetime import datetime, date, timedelta
 from time import time
 from ujson import decode
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
+from aiosqlite.core import Connection
 from aiogram import Bot, Dispatcher, executor, types
 from aiohttp import ClientSession
 from os import unlink
-from typing import Any
+from typing import Any, Dict
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -31,37 +32,44 @@ EXCHANGE_API = 'https://api.exchangeratesapi.io'
 
 
 def dt2str(dt: date) -> str:
+    """Convert date object to string"""
     return dt.strftime('%Y-%m-%d')
 
 
 def str2dt(_str: str) -> date:
+    """Convert string to date object"""
     return datetime.strptime(_str, '%Y-%m-%d').date()
 
 
 def round_cur(cur: Decimal) -> Decimal:
+    """Round a decimal with two decimal precision"""
     return cur.quantize(Decimal('0.01'), ROUND_HALF_UP)
 
 
 def conv_obj_str(obj: Any) -> str:
+    """Convert any object to string"""
     return codecs.encode(pickle.dumps(obj), "base64").decode()
 
 
 def conv_str_obj(_str: str) -> Any:
+    """Convert string to any object"""
     return pickle.loads(codecs.decode(_str.encode(), "base64"))
 
 
-async def query_ex_api(path=''):
+async def query_ex_api(path: str = '') -> str:
+    """Query something from exchange API by HTTP"""
     async with ClientSession() as session:
         async with session.get(f'{EXCHANGE_API}{path}') as resp:
             return await resp.text()
 
 
-def storage():
-    # todo query pool?
+def storage() -> Connection:
+    """Return a connection to sqlite3"""
     return aiosqlite.connect(DB_PATH)
 
 
-def check_storage():
+def check_storage() -> None:
+    """Check DB scheme or create one"""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     try:
@@ -74,7 +82,8 @@ def check_storage():
         conn.close()
 
 
-async def update_cache(data):
+async def update_cache(data: Any) -> None:
+    """Update the cached value in the storage and save a timestamp"""
     async with storage() as db:
         await db.execute("UPDATE stat SET value = :data WHERE key = 'cache'",
                          {'data': conv_obj_str(data)})
@@ -83,7 +92,8 @@ async def update_cache(data):
         await db.commit()
 
 
-async def get_cache():
+async def get_cache() -> Any:
+    """Get the cached value from the storage"""
     cache = {}
     async with storage() as db:
         async with db.execute('SELECT key, value FROM stat') as cursor:
@@ -92,12 +102,13 @@ async def get_cache():
     return cache
 
 
-def parse_latest(raw_data):
+def parse_latest(raw_data: str) -> Dict[str, Decimal]:
+    """Convert list of currencies with their values to dict object"""
     rates = decode(raw_data)['rates']  # todo api validation
     return {curr: round_cur(Decimal(rates[curr])) for curr in rates.keys()}
 
 
-def format_latest(data):
+def format_latest(data: dict):
     return '\n'.join([f'{k}: {v}' for k, v in data.items()])
 
 
