@@ -1,42 +1,52 @@
 import logging
+import argparse
+import uuid
 import pickle
 import codecs
 import aiosqlite
 import sqlite3
-from datetime import date, timedelta
+import matplotlib.pyplot as plt
+from datetime import datetime, date, timedelta
 from time import time
 from ujson import decode
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from aiogram import Bot, Dispatcher, executor, types
 from aiohttp import ClientSession
-# TODO comments
-API_TOKEN = ''  # TODO reset TOKEN and remove from here
-PROXY_URL = ''
+from os import unlink
+from typing import Any
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+
+# Configure system interface
+parser = argparse.ArgumentParser(description='Telegram change bot')
+parser.add_argument('--tg-bot-token', dest='tg_token')
+parser.add_argument('--proxy', help='Anonymous HTTP/SOCKS5 proxy URL')
+args = parser.parse_args()
+
+API_TOKEN = args.tg_token
+PROXY_URL = args.proxy
 DB_PATH = 'db.sqlite'
 EXCHANGE_API = 'https://api.exchangeratesapi.io'
 
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)  # TODO
-
-# Initialize bot and dispatcher
-bot = Bot(token=API_TOKEN, proxy=PROXY_URL) if PROXY_URL else Bot(token=API_TOKEN)
-dp = Dispatcher(bot)
-
-
-def dt2str(dt):
+def dt2str(dt: date) -> str:
     return dt.strftime('%Y-%m-%d')
 
 
-def round_cur(cur):
+def str2dt(_str: str) -> date:
+    return datetime.strptime(_str, '%Y-%m-%d').date()
+
+
+def round_cur(cur: Decimal) -> Decimal:
     return cur.quantize(Decimal('0.01'), ROUND_HALF_UP)
 
 
-def conv_obj_str(obj):
+def conv_obj_str(obj: Any) -> str:
     return codecs.encode(pickle.dumps(obj), "base64").decode()
 
 
-def conv_str_obj(_str):
+def conv_str_obj(_str: str) -> Any:
     return pickle.loads(codecs.decode(_str.encode(), "base64"))
 
 
@@ -67,7 +77,7 @@ def check_storage():
 async def update_cache(data):
     async with storage() as db:
         await db.execute("UPDATE stat SET value = :data WHERE key = 'cache'",
-                         {'data': str(conv_obj_str(data))})
+                         {'data': conv_obj_str(data)})
         await db.execute("UPDATE stat SET value = :data WHERE key = 'last_request_at'",
                          {'data': str(int(time()))})
         await db.commit()
@@ -108,90 +118,114 @@ async def get_curr_info():
     return stat_data
 
 
-@dp.message_handler(commands=['list', 'lst'])
-async def lst(message: types.Message):
-    stat_data = await get_curr_info()
-    stat_data_fmt = format_latest(stat_data)
-    await message.answer(stat_data_fmt)
-
-
-@dp.message_handler(commands=['exchange'])
-async def exchange(message: types.Message):
-    stat_data = await get_curr_info()
-    cmd_parts = message.text.split(' ')
-    cmd_sense = []
-    for part in cmd_parts:
-        if not part:
-            continue
-
-        if part.startswith('$'):
-            try:
-                cmd_sense.append(Decimal(part[1:]))
-                cmd_sense.append('USD')
-                continue
-            except InvalidOperation:
-                await message.answer('The command is wrong')
-                return
-
-        if part in stat_data.keys():
-            cmd_sense.append(part)
-            continue
-
-        try:
-            cmd_sense.append(Decimal(part))
-        except InvalidOperation:
-            continue
-
-    if len(cmd_sense) != 3 \
-            or not isinstance(cmd_sense[0], Decimal) \
-            or cmd_sense[1] != 'USD':
-        await message.answer('The command is wrong')
-        return
-
-    await message.answer(f'{round_cur(cmd_sense[0] * stat_data[cmd_sense[2]])} {cmd_sense[2]}')  # TODO a typo?
-
-
-@dp.message_handler(commands=['history'])
-async def history(message: types.Message):
-    stat_data = await get_curr_info()
-    cmd_parts = message.text.split(' ')
-    cmd_sense = []
-    for part in cmd_parts:
-        if part == '\/history':
-            continue
-        pair = part.split('/')
-        if len(pair) == 2 and pair[1] in stat_data.keys():
-            cmd_sense.append(pair[1])
-
-    if f'\/history USD/{cmd_sense[0]} for 7 days' != message.text:
-        await message.answer('The command is wrong')
-        return
-
-    date_to = date.today()
-    date_from = date_to - timedelta(7)
-    h_data_raw = await query_ex_api(f'/history?'
-                                    f'start_at={dt2str(date_from)}&'
-                                    f'end_at={dt2str(date_to)}&'
-                                    f'base=USD&'
-                                    f'symbols={cmd_sense[0]}')
-    h_data = decode(h_data_raw)
-    try:
-        h_data['error']
-    except KeyError:
-        await message.answer('No exchange rate data is available for the selected currency.')
-        return
-    # h_data['rates']
-    # gen chart
-    # save chart
-    # send chart
-    # delete chart
-
-
-@dp.message_handler(commands=['start'])
-async def echo(message: types.Message):
-    await message.answer('Hey!')
-
-
 if __name__ == '__main__':
+    # Initialize bot and dispatcher
+    bot = Bot(token=API_TOKEN, proxy=PROXY_URL) if PROXY_URL else Bot(token=API_TOKEN)
+    dp = Dispatcher(bot)
+
+    @dp.message_handler(commands=['list', 'lst'])
+    async def lst(message: types.Message):
+        stat_data = await get_curr_info()
+        stat_data_fmt = format_latest(stat_data)
+        await message.answer(stat_data_fmt)
+
+
+    @dp.message_handler(commands=['exchange'])
+    async def exchange(message: types.Message):
+        stat_data = await get_curr_info()
+        cmd_parts = message.text.split(' ')
+        cmd_sense = []
+        for part in cmd_parts:
+            if not part:
+                continue
+
+            if part.startswith('$'):
+                try:
+                    cmd_sense.append(Decimal(part[1:]))
+                    cmd_sense.append('USD')
+                    continue
+                except InvalidOperation:
+                    await message.answer('The command is wrong')
+                    return
+
+            if part in stat_data.keys():
+                cmd_sense.append(part)
+                continue
+
+            try:
+                cmd_sense.append(Decimal(part))
+            except InvalidOperation:
+                continue
+
+        if len(cmd_sense) != 3 \
+                or not isinstance(cmd_sense[0], Decimal) \
+                or cmd_sense[1] != 'USD':
+            await message.answer('The command is wrong')
+            return
+
+        await message.answer(f'{round_cur(cmd_sense[0] * stat_data[cmd_sense[2]])} {cmd_sense[2]}')  # TODO a typo?
+
+
+    @dp.message_handler(commands=['history'])
+    async def history(message: types.Message):
+        stat_data = await get_curr_info()
+        cmd_parts = message.text.split(' ')
+        cmd_sense = []
+        for part in cmd_parts:
+            if part == '/history':
+                continue
+            pair = part.split('/')
+            if len(pair) == 2 and pair[1] in stat_data.keys():
+                cmd_sense.append(pair[1])
+
+        if f'/history USD/{cmd_sense[0]} for 7 days' != message.text:
+            await message.answer('The command is wrong')
+            return
+
+        date_to = date.today()
+        date_from = date_to - timedelta(7)
+
+        query_text = (f'/history?'
+                      f'start_at={dt2str(date_from)}&'
+                      f'end_at={dt2str(date_to)}&'
+                      f'base=USD&'
+                      f'symbols={cmd_sense[0]}')
+
+        h_data_raw = await query_ex_api(query_text)
+        h_data = decode(h_data_raw)
+        try:
+            h_data['rates']
+        except KeyError:
+            await message.answer('No exchange rate data is available for the selected currency.')
+            return
+
+        # generate chart
+        chart_data_x = sorted(h_data['rates'].keys(), key=lambda x: str2dt(x))  # dates
+        chart_data_y = []  # currency values
+        list(map(lambda x:
+                 chart_data_y.append(float(list(h_data['rates'][x].values())[0])),
+                 chart_data_x))
+        chart_data_x = [str2dt(dt) for dt in chart_data_x]
+        fig, ax = plt.subplots()
+        ax.plot(chart_data_x, chart_data_y)
+        ax.set(xlabel='days', ylabel=cmd_sense[0])
+        plt.xticks(rotation=30)
+        ax.grid()
+        filename = str(uuid.uuid4())
+        fig.savefig(filename)
+
+        # send chart
+        with open(f'{filename}.png', 'rb') as chart:
+            await message.reply_photo(chart)
+
+        # delete chart
+        unlink(f'{filename}.png')
+
+
+    @dp.message_handler(commands=['start'])
+    async def echo(message: types.Message):
+        await message.answer('Hey!')
+
+
     check_storage()
     executor.start_polling(dp, skip_updates=True)

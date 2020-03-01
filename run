@@ -1,3 +1,3 @@
 #!/bin/bash
 rm db.sqlite
-python app.py
+python app.py --tg-bot-token $1 --proxy $2
