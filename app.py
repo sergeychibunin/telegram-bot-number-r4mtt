@@ -108,18 +108,21 @@ def parse_latest(raw_data: str) -> Dict[str, Decimal]:
     return {curr: round_cur(Decimal(rates[curr])) for curr in rates.keys()}
 
 
-def format_latest(data: dict):
+def format_latest(data: dict) -> str:
+    """Format the user view for currency values"""
     return '\n'.join([f'{k}: {v}' for k, v in data.items()])
 
 
-async def update_curr_info():
+async def update_curr_info() -> Dict[str, Decimal]:
+    """Query an info and save to cache"""
     stat_data_raw = await query_ex_api('/latest?base=USD')
     stat_data = parse_latest(stat_data_raw)
     await update_cache(stat_data)
     return stat_data
 
 
-async def get_curr_info():
+async def get_curr_info() -> Dict[str, Decimal]:
+    """Get an info about currencies"""
     stat_data_cache = await get_cache()
     if not stat_data_cache['last_request_at'] \
             or (time() - int(stat_data_cache['last_request_at']) > 10 * 60):  # todo 10 * 60
@@ -135,14 +138,20 @@ if __name__ == '__main__':
     dp = Dispatcher(bot)
 
     @dp.message_handler(commands=['list', 'lst'])
-    async def lst(message: types.Message):
+    async def lst(message: types.Message) -> None:
+        """Process the command /list|/lst.
+        Return list of all available rates
+        """
         stat_data = await get_curr_info()
         stat_data_fmt = format_latest(stat_data)
         await message.answer(stat_data_fmt)
 
 
     @dp.message_handler(commands=['exchange'])
-    async def exchange(message: types.Message):
+    async def exchange(message: types.Message) -> None:
+        """Process the command /exchange.
+        Convert to the second currency
+        """
         stat_data = await get_curr_info()
         cmd_parts = message.text.split(' ')
         cmd_sense = []
@@ -178,7 +187,10 @@ if __name__ == '__main__':
 
 
     @dp.message_handler(commands=['history'])
-    async def history(message: types.Message):
+    async def history(message: types.Message) -> None:
+        """Process the command /history.
+        Return an image chart which shows the exchange rate chart of the selected currency for the last 7 days
+        """
         stat_data = await get_curr_info()
         cmd_parts = message.text.split(' ')
         cmd_sense = []
@@ -234,7 +246,10 @@ if __name__ == '__main__':
 
 
     @dp.message_handler(commands=['start'])
-    async def echo(message: types.Message):
+    async def echo(message: types.Message) -> None:
+        """Process the command /start.
+        Greet an user
+        """
         await message.answer('Hey!')
 
 
