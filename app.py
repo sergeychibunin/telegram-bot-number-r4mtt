@@ -19,16 +19,13 @@ from typing import Any, Dict
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
-# Configure system interface
-parser = argparse.ArgumentParser(description='Telegram change bot')
-parser.add_argument('--tg-bot-token', dest='tg_token')
-parser.add_argument('--proxy', help='Anonymous HTTP/SOCKS5 proxy URL')
-args = parser.parse_args()
-
-API_TOKEN = args.tg_token
-PROXY_URL = args.proxy
 DB_PATH = 'db.sqlite'
 EXCHANGE_API = 'https://api.exchangeratesapi.io'
+
+
+class EAPINotAvailable(Exception):
+    """The special exception for problems with the exchange service"""
+    ...
 
 
 def dt2str(dt: date) -> str:
@@ -104,7 +101,10 @@ async def get_cache() -> Any:
 
 def parse_latest(raw_data: str) -> Dict[str, Decimal]:
     """Convert list of currencies with their values to dict object"""
-    rates = decode(raw_data)['rates']  # todo api validation
+    try:
+        rates = decode(raw_data)['rates']
+    except KeyError:
+        raise EAPINotAvailable
     return {curr: round_cur(Decimal(rates[curr])) for curr in rates.keys()}
 
 
@@ -125,16 +125,32 @@ async def get_curr_info() -> Dict[str, Decimal]:
     """Get an info about currencies"""
     stat_data_cache = await get_cache()
     if not stat_data_cache['last_request_at'] \
-            or (time() - int(stat_data_cache['last_request_at']) > 10 * 60):  # todo 10 * 60
+            or (time() - int(stat_data_cache['last_request_at']) > 10 * 60):
         stat_data = await update_curr_info()
     else:
         stat_data = conv_str_obj(stat_data_cache['cache'])
     return stat_data
 
 
+async def handle_lst() -> str:
+    """Process the command /list|/lst.
+    This is a handler
+    """
+    try:
+        return format_latest(await get_curr_info())
+    except EAPINotAvailable:
+        return 'Exchange rate service is unavailable'
+
+
 if __name__ == '__main__':
+    # Configure system interface
+    parser = argparse.ArgumentParser(description='Telegram change bot')
+    parser.add_argument('--tg-bot-token', dest='tg_token', default='')
+    parser.add_argument('--proxy', help='Anonymous HTTP/SOCKS5 proxy URL', default='')
+    args = parser.parse_args()
+
     # Initialize bot and dispatcher
-    bot = Bot(token=API_TOKEN, proxy=PROXY_URL) if PROXY_URL else Bot(token=API_TOKEN)
+    bot = Bot(token=args.tg_token, proxy=args.proxy) if args.proxy else Bot(token=args.tg_token)
     dp = Dispatcher(bot)
 
     @dp.message_handler(commands=['list', 'lst'])
@@ -142,9 +158,7 @@ if __name__ == '__main__':
         """Process the command /list|/lst.
         Return list of all available rates
         """
-        stat_data = await get_curr_info()
-        stat_data_fmt = format_latest(stat_data)
-        await message.answer(stat_data_fmt)
+        await message.answer(await handle_lst())
 
 
     @dp.message_handler(commands=['exchange'])
