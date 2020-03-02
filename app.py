@@ -142,6 +142,99 @@ async def handle_lst() -> str:
         return 'Exchange rate service is unavailable'
 
 
+async def handle_exchange(message: types.Message) -> str:
+    """Process the command /exchange.
+    This is a handler
+    """
+    stat_data = await get_curr_info()
+    cmd_parts = message.text.split(' ')
+    cmd_sense = []
+    for part in cmd_parts:
+        if not part:
+            continue
+
+        if part.startswith('$'):
+            try:
+                cmd_sense.append(Decimal(part[1:]))
+                cmd_sense.append('USD')
+                continue
+            except InvalidOperation:
+                return 'The command is wrong'
+
+        if part in stat_data.keys():
+            cmd_sense.append(part)
+            continue
+
+        try:
+            cmd_sense.append(Decimal(part))
+        except InvalidOperation:
+            continue
+
+    if len(cmd_sense) != 3 \
+            or not isinstance(cmd_sense[0], Decimal) \
+            or cmd_sense[1] != 'USD':
+        return 'The command is wrong'
+
+    return f'{round_cur(cmd_sense[0] * stat_data[cmd_sense[2]])} {cmd_sense[2]}'  # TODO Is there a typo in TOR?
+
+
+async def handle_history(message: types.Message) -> None:
+    """Process the command /history.
+    This is a handler
+    """
+    stat_data = await get_curr_info()
+    cmd_parts = message.text.split(' ')
+    cmd_sense = []
+    for part in cmd_parts:
+        if part == '/history':
+            continue
+        pair = part.split('/')
+        if len(pair) == 2 and pair[1] in stat_data.keys():
+            cmd_sense.append(pair[1])
+
+    if len(cmd_sense) == 0 or f'/history USD/{cmd_sense[0]} for 7 days' != message.text:
+        await message.answer('The command is wrong')
+        return
+
+    date_to = date.today()
+    date_from = date_to - timedelta(7)
+
+    query_text = (f'/history?'
+                  f'start_at={dt2str(date_from)}&'
+                  f'end_at={dt2str(date_to)}&'
+                  f'base=USD&'
+                  f'symbols={cmd_sense[0]}')
+
+    h_data_raw = await query_ex_api(query_text)
+    h_data = decode(h_data_raw)
+    try:
+        h_data['rates']
+    except KeyError:
+        await message.answer('No exchange rate data is available for the selected currency.')
+        return
+
+    # generate chart
+    chart_data_x = sorted(h_data['rates'].keys(), key=lambda x: str2dt(x))  # dates
+    chart_data_y = []  # currency values
+    list(map(lambda x:
+             chart_data_y.append(float(list(h_data['rates'][x].values())[0])),
+             chart_data_x))
+    chart_data_x = [str2dt(dt) for dt in chart_data_x]
+    fig, ax = plt.subplots()
+    ax.plot(chart_data_x, chart_data_y)
+    ax.set(xlabel='days', ylabel=cmd_sense[0])
+    plt.xticks(rotation=30)
+    ax.grid()
+    filename = str(uuid.uuid4())
+    fig.savefig(filename)
+
+    # send chart
+    with open(f'{filename}.png', 'rb') as chart:
+        await message.reply_photo(chart)
+
+    # delete chart
+    unlink(f'{filename}.png')
+
 if __name__ == '__main__':
     # Configure system interface
     parser = argparse.ArgumentParser(description='Telegram change bot')
@@ -166,38 +259,7 @@ if __name__ == '__main__':
         """Process the command /exchange.
         Convert to the second currency
         """
-        stat_data = await get_curr_info()
-        cmd_parts = message.text.split(' ')
-        cmd_sense = []
-        for part in cmd_parts:
-            if not part:
-                continue
-
-            if part.startswith('$'):
-                try:
-                    cmd_sense.append(Decimal(part[1:]))
-                    cmd_sense.append('USD')
-                    continue
-                except InvalidOperation:
-                    await message.answer('The command is wrong')
-                    return
-
-            if part in stat_data.keys():
-                cmd_sense.append(part)
-                continue
-
-            try:
-                cmd_sense.append(Decimal(part))
-            except InvalidOperation:
-                continue
-
-        if len(cmd_sense) != 3 \
-                or not isinstance(cmd_sense[0], Decimal) \
-                or cmd_sense[1] != 'USD':
-            await message.answer('The command is wrong')
-            return
-
-        await message.answer(f'{round_cur(cmd_sense[0] * stat_data[cmd_sense[2]])} {cmd_sense[2]}')  # TODO a typo?
+        await message.answer(await handle_exchange(message))
 
 
     @dp.message_handler(commands=['history'])
@@ -205,58 +267,7 @@ if __name__ == '__main__':
         """Process the command /history.
         Return an image chart which shows the exchange rate chart of the selected currency for the last 7 days
         """
-        stat_data = await get_curr_info()
-        cmd_parts = message.text.split(' ')
-        cmd_sense = []
-        for part in cmd_parts:
-            if part == '/history':
-                continue
-            pair = part.split('/')
-            if len(pair) == 2 and pair[1] in stat_data.keys():
-                cmd_sense.append(pair[1])
-
-        if f'/history USD/{cmd_sense[0]} for 7 days' != message.text:
-            await message.answer('The command is wrong')
-            return
-
-        date_to = date.today()
-        date_from = date_to - timedelta(7)
-
-        query_text = (f'/history?'
-                      f'start_at={dt2str(date_from)}&'
-                      f'end_at={dt2str(date_to)}&'
-                      f'base=USD&'
-                      f'symbols={cmd_sense[0]}')
-
-        h_data_raw = await query_ex_api(query_text)
-        h_data = decode(h_data_raw)
-        try:
-            h_data['rates']
-        except KeyError:
-            await message.answer('No exchange rate data is available for the selected currency.')
-            return
-
-        # generate chart
-        chart_data_x = sorted(h_data['rates'].keys(), key=lambda x: str2dt(x))  # dates
-        chart_data_y = []  # currency values
-        list(map(lambda x:
-                 chart_data_y.append(float(list(h_data['rates'][x].values())[0])),
-                 chart_data_x))
-        chart_data_x = [str2dt(dt) for dt in chart_data_x]
-        fig, ax = plt.subplots()
-        ax.plot(chart_data_x, chart_data_y)
-        ax.set(xlabel='days', ylabel=cmd_sense[0])
-        plt.xticks(rotation=30)
-        ax.grid()
-        filename = str(uuid.uuid4())
-        fig.savefig(filename)
-
-        # send chart
-        with open(f'{filename}.png', 'rb') as chart:
-            await message.reply_photo(chart)
-
-        # delete chart
-        unlink(f'{filename}.png')
+        await handle_history(message)
 
 
     @dp.message_handler(commands=['start'])
